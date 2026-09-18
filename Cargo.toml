@@ -1,0 +1,10 @@
+[package]
+name = "ratatui-tree-widget"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.29"
+
+[dev-dependencies]
+crossterm = "0.28"
