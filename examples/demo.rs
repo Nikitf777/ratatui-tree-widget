@@ -120,13 +120,25 @@ fn handle_mouse(mouse: MouseEvent, tree: &TreeNode, state: &mut TreeState) {
         return;
     }
 
-    // Compute where the tree widget is rendered.
-    // The tree starts after the title row (1) and top border (1).
-    let tree_content_y = 1u16 + 1;
+    // The tree widget is laid out as:
+    //   row 0: title
+    //   row 1+: tree widget with bordered block
+    // The block's left border occupies column 0, content starts at column 1.
+    let tree_content_y = 1u16 + 1; // title + top border
+    let tree_content_x = 1u16; // left border
     let row = mouse.row.saturating_sub(tree_content_y);
+    let col = mouse.column.saturating_sub(tree_content_x);
 
     let items = state.flatten(tree);
     state.handle_click(row, &items);
+
+    // Determine which node within the row was clicked using the same layout
+    // math the widget uses.
+    if let Some(item) = items.get(state.selected_row()) {
+        let nc = ratatui_tree_widget::node_columns(item, &Default::default());
+        let node_idx = ratatui_tree_widget::node_index_at_col(col, &nc);
+        state.set_selected_node(node_idx);
+    }
 }
 
 // ---------------------------------------------------------------------------

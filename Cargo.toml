@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ratatui = "0.29"
+unicode-width = "0.2"
 
 [dev-dependencies]
 crossterm = "0.28"

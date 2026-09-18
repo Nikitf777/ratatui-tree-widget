@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, StatefulWidget, Widget},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::FlattenedItem;
 use crate::TreeNode;
@@ -254,5 +255,152 @@ impl Widget for TreeWidget<'_> {
         if let Some(block) = self.block {
             block.render(area, buf);
         }
+    }
+}
+
+/// The start column of each node's text within a rendered row, relative to the
+/// tree content area (after block borders).
+///
+/// This is computed by [`node_columns`] and used by [`node_index_at_col`].
+#[derive(Debug, Clone)]
+pub struct NodeColumns {
+    /// `start_cols[i]` is the column where the text of `nodes[i]` begins.
+    pub start_cols: Vec<u16>,
+}
+
+/// Compute the start column of each node's text within a rendered row.
+///
+/// Mirrors the prefix layout produced by [`TreeWidget`]:
+///
+/// ```text
+/// [indent…][branch][glyph] node0 [sep] node1 [sep] node2 …
+/// ```
+pub fn node_columns(item: &FlattenedItem, bc: &BranchChars) -> NodeColumns {
+    let mut x: u16 = 0;
+
+    // Indentation
+    x += (item.depth as u16) * UnicodeWidthStr::width(bc.indent) as u16;
+
+    // Branch connector
+    if item.depth > 0 {
+        x += UnicodeWidthStr::width(bc.middle) as u16;
+    }
+
+    // Glyph
+    x += if item.has_children {
+        UnicodeWidthStr::width(bc.collapsed) as u16
+    } else {
+        UnicodeWidthStr::width(bc.leaf) as u16
+    };
+
+    let mut start_cols = Vec::with_capacity(item.nodes.len());
+
+    for (j, node) in item.nodes.iter().enumerate() {
+        if j > 0 {
+            x += UnicodeWidthStr::width(bc.separator) as u16;
+        }
+        start_cols.push(x);
+        x += UnicodeWidthStr::width(node.text.as_str()) as u16;
+    }
+
+    NodeColumns { start_cols }
+}
+
+/// Determine which node in a flattened row is at the given column offset.
+///
+/// `col` is the 0-based column relative to the **start of the tree content**
+/// (after block borders have been subtracted).
+///
+/// Returns the index into [`FlattenedItem::nodes`] whose text span contains
+/// `col`, or the last node if `col` falls past the end.
+///
+/// Use [`node_columns`] to obtain the [`NodeColumns`] argument.
+pub fn node_index_at_col(col: u16, nodecols: &NodeColumns) -> usize {
+    // Walk backwards – find the last node whose text starts at or before `col`.
+    // If `col` falls before the very first node, return 0.
+    for (idx, &start) in nodecols.start_cols.iter().enumerate().rev() {
+        if col >= start {
+            return idx;
+        }
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TreeNode;
+
+    #[test]
+    fn node_columns_single_node() {
+        let node = TreeNode::new("hello");
+        let item = FlattenedItem {
+            path: vec![],
+            nodes: vec![&node],
+            depth: 0,
+            has_children: false,
+            expanded: false,
+        };
+        let bc = BranchChars::default();
+        let nc = node_columns(&item, &bc);
+        // depth 0, no branch, leaf glyph "  " → x starts at 2.
+        assert_eq!(nc.start_cols, vec![2]);
+    }
+
+    #[test]
+    fn node_columns_multi_node() {
+        let a = TreeNode::new("a");
+        let b = TreeNode::new("bb");
+        let c = TreeNode::new("ccc");
+        let item = FlattenedItem {
+            path: vec![],
+            nodes: vec![&a, &b, &c],
+            depth: 0,
+            has_children: false,
+            expanded: false,
+        };
+        let bc = BranchChars::default();
+        let nc = node_columns(&item, &bc);
+        // leaf glyph "  " = 2 cols
+        // "a" starts at col 2, "bb" at 2+1+3=6, "ccc" at 6+2+3=11
+        assert_eq!(nc.start_cols, vec![2, 6, 11]);
+    }
+
+    #[test]
+    fn node_columns_with_depth() {
+        let node = TreeNode::new("x");
+        let item = FlattenedItem {
+            path: vec![],
+            nodes: vec![&node],
+            depth: 2,
+            has_children: true,
+            expanded: false,
+        };
+        let bc = BranchChars::default();
+        let nc = node_columns(&item, &bc);
+        // indent "  " per depth = 2*2=4, branch "├─ "=3, glyph "▶ "=2 → total 9
+        assert_eq!(nc.start_cols, vec![9]);
+    }
+
+    #[test]
+    fn node_index_at_col_basic() {
+        let a = TreeNode::new("a");
+        let b = TreeNode::new("bb");
+        let item = FlattenedItem {
+            path: vec![],
+            nodes: vec![&a, &b],
+            depth: 0,
+            has_children: false,
+            expanded: false,
+        };
+        let bc = BranchChars::default();
+        let nc = node_columns(&item, &bc);
+        // leaf "  "=2, "a" at 2, sep " → "=3, "bb" at 6
+        assert_eq!(node_index_at_col(0, &nc), 0);
+        assert_eq!(node_index_at_col(2, &nc), 0); // "a"
+        assert_eq!(node_index_at_col(3, &nc), 0); // still "a"
+        assert_eq!(node_index_at_col(5, &nc), 0); // still "a" (col 5 is last col of "a)
+        assert_eq!(node_index_at_col(6, &nc), 1); // "bb"
+        assert_eq!(node_index_at_col(7, &nc), 1); // "bb"
     }
 }

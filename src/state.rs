@@ -110,6 +110,11 @@ impl TreeState {
         self.selected_node = node;
     }
 
+    /// Set only the node index within the current row.
+    pub fn set_selected_node(&mut self, node: usize) {
+        self.selected_node = node;
+    }
+
     /// Move selection down by one row, keeping the same node index clamped
     /// to the number of nodes on the new row.
     pub fn key_down(&mut self, flatten: &[FlattenedItem]) {
