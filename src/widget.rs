@@ -15,10 +15,10 @@ use crate::TreeState;
 // TreeWidget
 // ---------------------------------------------------------------------------
 
-/// A Ratatui widget that renders a tree of [`TreeNode`]s with expand/collapse
+/// A Ratatui widget that renders a forest of [`TreeNode`]s with expand/collapse
 /// and keyboard / mouse interaction.
 ///
-/// The widget borrows the tree root and reads the current [`TreeState`] to
+/// The widget borrows the tree roots and reads the current [`TreeState`] to
 /// determine selection and expansion.  When a row contains multiple nodes (a
 /// single-child chain), the highlight is applied **only** to the focused node
 /// rather than the entire row.
@@ -30,14 +30,14 @@ use crate::TreeState;
 /// let mut state = TreeState::new();
 ///
 /// f.render_stateful_widget(
-///     TreeWidget::new(&tree).highlight_style(my_style),
+///     TreeWidget::new(&[tree]).highlight_style(my_style),
 ///     area,
 ///     &mut state,
 /// );
 /// ```
 pub struct TreeWidget<'a> {
-    /// Reference to the root of the tree to render.
-    root: &'a TreeNode,
+    /// Reference to the roots of the trees to render.
+    roots: &'a [TreeNode],
     /// Optional block drawn around the tree.
     block: Option<Block<'a>>,
     /// Style for every non-selected element.
@@ -79,10 +79,13 @@ impl Default for BranchChars {
 }
 
 impl<'a> TreeWidget<'a> {
-    /// Create a new tree widget that renders `root`.
-    pub fn new(root: &'a TreeNode) -> Self {
+    /// Create a new tree widget that renders `roots`.
+    ///
+    /// Each element of `roots` is a top-level tree rendered as its own
+    /// depth-0 line.  Pass `std::slice::from_ref(&tree)` for a single tree.
+    pub fn new(roots: &'a [TreeNode]) -> Self {
         Self {
-            root,
+            roots,
             block: None,
             style: Style::default(),
             highlight_style: Style::default()
@@ -245,7 +248,7 @@ impl StatefulWidget for TreeWidget<'_> {
             area
         };
 
-        let items = state.flatten(self.root);
+        let items = state.flatten(self.roots);
         self.render_inner(inner, buf, &items, state);
     }
 }

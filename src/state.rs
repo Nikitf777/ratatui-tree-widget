@@ -13,6 +13,9 @@ use crate::TreeNode;
 /// a single visual line.  `nodes` contains every node in that chain; `path`
 /// points to the *last* node in the chain (the one that could possibly have
 /// >1 child and be toggled).
+///
+/// Paths have the form `[root_index, child_index, …]`.  The first element is
+/// the index of the root the subtree belongs to.
 #[derive(Debug, Clone)]
 pub struct FlattenedItem<'a> {
     /// Path to the last (deepest) node in this visual line.
@@ -52,7 +55,7 @@ impl FlattenedItem<'_> {
 // TreeState
 // ---------------------------------------------------------------------------
 
-/// Tracks selection and expansion state for a tree of [`TreeNode`]s.
+/// Tracks selection and expansion state for a forest of [`TreeNode`]s.
 ///
 /// Selection is split into two components:
 /// - `selected_row` – which visual line (flat index) is active
@@ -60,6 +63,9 @@ impl FlattenedItem<'_> {
 ///
 /// This lets you navigate left/right through a chain of single-child nodes
 /// that are collapsed onto one row (e.g. `src → main.rs → run()`).
+///
+/// Expansion paths have the form `[root_index, child_index, …]` where the
+/// first element indexes into the forest of roots passed to [`TreeState::flatten`].
 #[derive(Debug, Clone)]
 pub struct TreeState {
     /// Index into the flat visible-items list of the currently selected line.
@@ -201,13 +207,16 @@ impl TreeState {
 
     // -- Flattening --------------------------------------------------------
 
-    /// Flatten the tree into a list of visible lines, taking expansion state
-    /// and single-child chaining into account.
+    /// Flatten a forest of roots into a list of visible lines, taking
+    /// expansion state and single-child chaining into account.
     ///
-    /// The returned vector is what should be rendered.
-    pub fn flatten<'a>(&self, root: &'a TreeNode) -> Vec<FlattenedItem<'a>> {
+    /// `roots` holds every top-level tree; each root is rendered as its own
+    /// depth-0 line.  The returned vector is what should be rendered.
+    pub fn flatten<'a>(&self, roots: &'a [TreeNode]) -> Vec<FlattenedItem<'a>> {
         let mut items = Vec::new();
-        self.flatten_rec(root, &[], 0, &mut items);
+        for (i, root) in roots.iter().enumerate() {
+            self.flatten_rec(root, &[i], 0, &mut items);
+        }
         items
     }
 
@@ -341,15 +350,54 @@ mod tests {
         )
     }
 
+    /// A helper for the common single-root test case.
+    fn flatten_one<'a>(state: &TreeState, tree: &'a TreeNode) -> Vec<FlattenedItem<'a>> {
+        state.flatten(std::slice::from_ref(tree))
+    }
+
     // -- flattening ------------------------------------------------------------
 
     #[test]
     fn flatten_initially_all_collapsed() {
         let tree = sample_tree();
         let state = TreeState::new();
-        let items = state.flatten(&tree);
+        let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].display_text(), "root");
+        assert_eq!(items[0].path, vec![0]);
+    }
+
+    #[test]
+    fn flatten_multiple_roots() {
+        let tree_a = TreeNode::with_children(
+            "A",
+            vec![
+                TreeNode::with_children("a1", vec![TreeNode::new("a1x")]),
+                TreeNode::new("a2"),
+            ],
+        );
+        let tree_b = TreeNode::new("B");
+
+        let mut state = TreeState::new();
+        state.expand(&[0]); // expand root A only
+
+        let roots = [tree_a, tree_b];
+        let items = state.flatten(&roots);
+        assert_eq!(items.len(), 4);
+        // 0: A (depth 0, root 0), 1: a1→a1x (depth 1), 2: a2 (depth 1), 3: B
+        assert_eq!(items[0].display_text(), "A");
+        assert_eq!(items[0].depth, 0);
+        assert_eq!(items[0].path, vec![0]);
+        assert_eq!(items[1].display_text(), "a1 → a1x");
+        assert_eq!(items[1].depth, 1);
+        // Path points to the last node in the chain (a1x).
+        assert_eq!(items[1].path, vec![0, 0, 0]);
+        assert_eq!(items[2].display_text(), "a2");
+        assert_eq!(items[2].depth, 1);
+        assert_eq!(items[2].path, vec![0, 1]);
+        assert_eq!(items[3].display_text(), "B");
+        assert_eq!(items[3].depth, 0);
+        assert_eq!(items[3].path, vec![1]);
     }
 
     #[test]
@@ -363,9 +411,9 @@ mod tests {
             )],
         );
         let mut state = TreeState::new();
-        state.expand(&[]); // expand root "a"
+        state.expand(&[0]); // expand root "a"
 
-        let items = state.flatten(&tree);
+        let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 1, "single-child chain on one line");
         assert_eq!(items[0].display_text(), "a → a1 → a1a → leaf");
         assert_eq!(items[0].num_nodes(), 4);
@@ -376,11 +424,11 @@ mod tests {
         let tree = sample_tree();
         let mut state = TreeState::new();
 
-        state.expand(&[]); // root
-        state.expand(&[1]); // b
-        state.expand(&[1, 0]); // b1
+        state.expand(&[0]); // root
+        state.expand(&[0, 1]); // b
+        state.expand(&[0, 1, 0]); // b1
 
-        let items = state.flatten(&tree);
+        let items = flatten_one(&state, &tree);
         // 0: root, 1: a→a1, 2: b, 3: b1→b1a, 4: b2, 5: c
         assert_eq!(items.len(), 6);
         assert_eq!(items[0].display_text(), "root");
@@ -397,9 +445,9 @@ mod tests {
     fn up_down_basic() {
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
+        state.expand(&[0]);
 
-        let items = state.flatten(&tree); // 4 rows
+        let items = flatten_one(&state, &tree); // 4 rows
         assert_eq!(state.selected_row(), 0);
         assert_eq!(state.selected_node(), 0);
 
@@ -424,9 +472,38 @@ mod tests {
     fn up_stays_at_top() {
         let tree = sample_tree();
         let mut state = TreeState::new();
-        let items = state.flatten(&tree); // 1 row
+        let items = flatten_one(&state, &tree); // 1 row
         state.key_up(&items);
         assert_eq!(state.selected_row(), 0);
+    }
+
+    #[test]
+    fn navigation_across_roots() {
+        // Give each root two children so expansion reveals depth-1 rows.
+        let tree_a = TreeNode::with_children("A", vec![TreeNode::new("a1"), TreeNode::new("a2")]);
+        let tree_b = TreeNode::with_children("B", vec![TreeNode::new("b1"), TreeNode::new("b2")]);
+        let roots = [tree_a, tree_b];
+
+        let mut state = TreeState::new();
+        state.expand(&[0]);
+        state.expand(&[1]);
+
+        let items = state.flatten(&roots);
+        // 0: A, 1: a1, 2: a2, 3: B, 4: b1, 5: b2
+        assert_eq!(items.len(), 6);
+
+        state.select(0, 0);
+        state.key_down(&items);
+        assert_eq!(state.selected_row(), 1); // a1
+        state.key_down(&items);
+        assert_eq!(state.selected_row(), 2); // a2
+        state.key_down(&items);
+        assert_eq!(state.selected_row(), 3); // root B
+        assert_eq!(items[state.selected_row()].path, vec![1]);
+        state.key_down(&items);
+        assert_eq!(state.selected_row(), 4); // b1 under root B
+        state.key_up(&items);
+        assert_eq!(state.selected_row(), 3);
     }
 
     #[test]
@@ -434,8 +511,8 @@ mod tests {
         // root has 1 node; a→a1 has 2 nodes; b has 1 node
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
-        let items = state.flatten(&tree);
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
 
         // move to row 1 (a→a1, 2 nodes) and select node 1
         state.select(1, 1);
@@ -453,8 +530,8 @@ mod tests {
     fn right_moves_through_nodes_then_toggles() {
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
-        let items = state.flatten(&tree);
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
 
         // row 1 = a→a1 (2 nodes), select node 0
         state.select(1, 0);
@@ -470,16 +547,16 @@ mod tests {
     fn right_on_last_node_with_children_toggles() {
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
+        state.expand(&[0]);
 
         // row 2 = "b" (1 node, has children, not expanded)
         state.select(2, 0);
-        assert!(!state.is_expanded(&[1]));
+        assert!(!state.is_expanded(&[0, 1]));
 
-        state.key_right(&state.flatten(&tree));
+        state.key_right(&flatten_one(&state, &tree));
         // last node + has children → toggle
-        let items = state.flatten(&tree);
-        assert!(state.is_expanded(&[1]));
+        let items = flatten_one(&state, &tree);
+        assert!(state.is_expanded(&[0, 1]));
         // should now see b1→b1a and b2
         assert!(items.len() > 4);
     }
@@ -488,8 +565,8 @@ mod tests {
     fn left_moves_back_through_nodes() {
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
-        let items = state.flatten(&tree);
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
 
         state.select(1, 1); // a→a1, node 1
         assert_eq!(state.selected_node(), 1);
@@ -507,16 +584,16 @@ mod tests {
         // root expanded, select root's first (only) node, press left → collapse
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
-        let items = state.flatten(&tree);
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
         assert!(items.len() > 1);
 
         state.select(0, 0);
-        assert!(state.is_expanded(&[]));
+        assert!(state.is_expanded(&[0]));
         state.key_left(&items); // first node + expanded → collapse
-        let items = state.flatten(&tree);
+        let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 1);
-        assert!(!state.is_expanded(&[]));
+        assert!(!state.is_expanded(&[0]));
     }
 
     // -- toggle ----------------------------------------------------------------
@@ -526,15 +603,15 @@ mod tests {
         let tree = sample_tree();
         let mut state = TreeState::new();
 
-        let items = state.flatten(&tree);
+        let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 1);
 
-        state.toggle(&[]);
-        let items = state.flatten(&tree);
+        state.toggle(&[0]);
+        let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 4);
 
-        state.toggle(&[]);
-        let items = state.flatten(&tree);
+        state.toggle(&[0]);
+        let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 1);
     }
 
@@ -545,18 +622,17 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let tree = sample_tree();
         let mut state = TreeState::new();
-        state.expand(&[]);
+        state.expand(&[0]);
 
         let make = |code| KeyEvent::new(code, KeyModifiers::NONE);
 
-        let items = state.flatten(&tree);
+        let items = flatten_one(&state, &tree);
         assert_eq!(state.selected_row(), 0);
 
         state.handle_key(make(KeyCode::Down), &items);
         assert_eq!(state.selected_row(), 1);
 
-        state.handle_key(make(KeyCode::Right), &state.flatten(&tree));
-        let items = state.flatten(&tree);
+        state.handle_key(make(KeyCode::Right), &items);
         assert_eq!(state.selected_row(), 1);
         assert_eq!(state.selected_node(), 1);
 
@@ -566,7 +642,7 @@ mod tests {
         state.handle_key(make(KeyCode::Up), &items);
         assert_eq!(state.selected_row(), 0);
 
-        state.handle_key(make(KeyCode::Enter), &state.flatten(&tree));
-        assert!(!state.is_expanded(&[]));
+        state.handle_key(make(KeyCode::Enter), &flatten_one(&state, &tree));
+        assert!(!state.is_expanded(&[0]));
     }
 }

@@ -13,8 +13,8 @@ use ratatui::Frame;
 use ratatui_tree_widget::{TreeNode, TreeState, TreeWidget};
 
 fn main() -> io::Result<()> {
-    // ---- Build a sample tree ------------------------------------------------
-    let tree = build_sample_tree();
+    // ---- Build a sample forest ----------------------------------------------
+    let roots = build_sample_forest();
 
     // ---- Terminal setup -----------------------------------------------------
     enable_raw_mode()?;
@@ -24,23 +24,23 @@ fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
     let mut state = TreeState::new();
 
-    // Expand root by default
-    state.expand(&[]);
+    // Expand the first root by default
+    state.expand(&[0]);
 
     // ---- Main loop ----------------------------------------------------------
     loop {
-        terminal.draw(|f| draw(f, &tree, &mut state))?;
+        terminal.draw(|f| draw(f, &roots, &mut state))?;
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => break,
                 _ => {
-                    let items = state.flatten(&tree);
+                    let items = state.flatten(&roots);
                     state.handle_key(key, &items);
                 }
             },
             Event::Mouse(mouse) => {
-                handle_mouse(mouse, &tree, &mut state);
+                handle_mouse(mouse, &roots, &mut state);
             }
             _ => {}
         }
@@ -58,7 +58,7 @@ fn main() -> io::Result<()> {
 // Drawing
 // ---------------------------------------------------------------------------
 
-fn draw(f: &mut Frame, tree: &TreeNode, state: &mut TreeState) {
+fn draw(f: &mut Frame, roots: &[TreeNode], state: &mut TreeState) {
     let area = f.area();
 
     let [title_area, tree_area, help_area] = Layout::vertical([
@@ -77,7 +77,7 @@ fn draw(f: &mut Frame, tree: &TreeNode, state: &mut TreeState) {
     );
 
     // The tree
-    let tree_widget = TreeWidget::new(tree)
+    let tree_widget = TreeWidget::new(roots)
         .block(
             Block::bordered()
                 .title(" Tree ")
@@ -115,7 +115,7 @@ fn draw(f: &mut Frame, tree: &TreeNode, state: &mut TreeState) {
 // Mouse handling
 // ---------------------------------------------------------------------------
 
-fn handle_mouse(mouse: MouseEvent, tree: &TreeNode, state: &mut TreeState) {
+fn handle_mouse(mouse: MouseEvent, roots: &[TreeNode], state: &mut TreeState) {
     if !matches!(mouse.kind, MouseEventKind::Down(_)) {
         return;
     }
@@ -129,7 +129,7 @@ fn handle_mouse(mouse: MouseEvent, tree: &TreeNode, state: &mut TreeState) {
     let row = mouse.row.saturating_sub(tree_content_y);
     let col = mouse.column.saturating_sub(tree_content_x);
 
-    let items = state.flatten(tree);
+    let items = state.flatten(roots);
     state.handle_click(row, &items);
 
     // Determine which node within the row was clicked using the same layout
@@ -142,91 +142,99 @@ fn handle_mouse(mouse: MouseEvent, tree: &TreeNode, state: &mut TreeState) {
 }
 
 // ---------------------------------------------------------------------------
-// Sample tree
+// Sample forest
 // ---------------------------------------------------------------------------
 
-fn build_sample_tree() -> TreeNode {
-    // A rich tree that demonstrates:
+fn build_sample_forest() -> Vec<TreeNode> {
+    // Two independent projects, demonstrating that the widget renders each
+    // root as its own top-level line:
     //   - Single-child chains rendered inline
     //   - Multiple children
     //   - Deep nesting
     //   - Many leaves
 
-    TreeNode::with_children(
-        "Project Root",
-        vec![
-            // ── Single-child chain ──────────────────────────────────────
-            TreeNode::with_children(
-                "README.md",
-                vec![TreeNode::with_children(
-                    "Draft",
-                    vec![TreeNode::new("v1.0")],
-                )],
-            ),
-            // ─── Source directory ────────────────────────────────────────
-            TreeNode::with_children(
-                "src",
-                vec![
-                    TreeNode::with_children(
-                        "main.rs",
-                        vec![
-                            TreeNode::new("fn main()"),
-                            TreeNode::new("parse_args()"),
-                            TreeNode::new("run()"),
-                        ],
-                    ),
-                    TreeNode::with_children(
-                        "lib.rs",
-                        vec![
-                            TreeNode::new("pub fn init()"),
-                            TreeNode::new("pub fn handle()"),
-                            TreeNode::new("pub fn cleanup()"),
-                        ],
-                    ),
-                    TreeNode::with_children(
-                        "utils.rs",
-                        vec![TreeNode::new("fn hash()"), TreeNode::new("fn validate()")],
-                    ),
-                ],
-            ),
-            // ─── Config ──────────────────────────────────────────────────
-            TreeNode::with_children(
-                "config",
-                vec![
-                    TreeNode::with_children(
-                        "settings.toml",
-                        vec![TreeNode::with_children(
-                            "User",
-                            vec![TreeNode::new("theme = \"dark\"")],
-                        )],
-                    ),
-                    TreeNode::new("defaults.toml"),
-                ],
-            ),
-            // ─── Nested single-child chain ──────────────────────────────
-            TreeNode::with_children(
-                "docs",
-                vec![TreeNode::with_children(
-                    "guide",
+    vec![
+        TreeNode::with_children(
+            "Project Alpha",
+            vec![
+                // ── Single-child chain ──────────────────────────────────────
+                TreeNode::with_children(
+                    "README.md",
                     vec![TreeNode::with_children(
-                        "getting-started.md",
+                        "Draft",
+                        vec![TreeNode::new("v1.0")],
+                    )],
+                ),
+                // ─── Source directory ────────────────────────────────────────
+                TreeNode::with_children(
+                    "src",
+                    vec![
+                        TreeNode::with_children(
+                            "main.rs",
+                            vec![
+                                TreeNode::new("fn main()"),
+                                TreeNode::new("parse_args()"),
+                                TreeNode::new("run()"),
+                            ],
+                        ),
+                        TreeNode::with_children(
+                            "lib.rs",
+                            vec![
+                                TreeNode::new("pub fn init()"),
+                                TreeNode::new("pub fn handle()"),
+                                TreeNode::new("pub fn cleanup()"),
+                            ],
+                        ),
+                        TreeNode::with_children(
+                            "utils.rs",
+                            vec![TreeNode::new("fn hash()"), TreeNode::new("fn validate()")],
+                        ),
+                    ],
+                ),
+                // ─── Nested single-child chain ──────────────────────────────
+                TreeNode::with_children(
+                    "docs",
+                    vec![TreeNode::with_children(
+                        "guide",
                         vec![TreeNode::with_children(
-                            "chapter-1.md",
-                            vec![TreeNode::new("Installation")],
+                            "getting-started.md",
+                            vec![TreeNode::with_children(
+                                "chapter-1.md",
+                                vec![TreeNode::new("Installation")],
+                            )],
                         )],
                     )],
-                )],
-            ),
-            // ─── Assets (leaf) ───────────────────────────────────────────
-            TreeNode::new("assets/"),
-            // ─── Tests ───────────────────────────────────────────────────
-            TreeNode::with_children(
-                "tests",
-                vec![
-                    TreeNode::new("integration_test.rs"),
-                    TreeNode::new("unit_test.rs"),
-                ],
-            ),
-        ],
-    )
+                ),
+            ],
+        ),
+        TreeNode::with_children(
+            "Project Beta",
+            vec![
+                // ─── Config ──────────────────────────────────────────────────
+                TreeNode::with_children(
+                    "config",
+                    vec![
+                        TreeNode::with_children(
+                            "settings.toml",
+                            vec![TreeNode::with_children(
+                                "User",
+                                vec![TreeNode::new("theme = \"dark\"")],
+                            )],
+                        ),
+                        TreeNode::new("defaults.toml"),
+                    ],
+                ),
+                // ─── Assets (leaf) ───────────────────────────────────────────
+                TreeNode::new("assets/"),
+                // ─── Tests ───────────────────────────────────────────────────
+                TreeNode::with_children(
+                    "tests",
+                    vec![
+                        TreeNode::new("integration_test.rs"),
+                        TreeNode::new("unit_test.rs"),
+                    ],
+                ),
+            ],
+        ),
+    ]
 }
