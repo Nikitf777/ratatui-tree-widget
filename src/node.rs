@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 
 use ratatui::style::Style;
@@ -12,6 +13,12 @@ pub struct TreeNode {
     /// Style used for this node's text when it is not the focused node.
     /// `None` falls back to the widget's base style.
     pub style: Option<Style>,
+    /// Separator drawn immediately to the left of this node's text, when the
+    /// node has a preceding node on the same line.
+    pub separator_left: Option<String>,
+    /// Separator drawn immediately to the right of this node's text, when the
+    /// node has a following node on the same line.
+    pub separator_right: Option<String>,
 }
 
 impl TreeNode {
@@ -21,6 +28,8 @@ impl TreeNode {
             text: text.into(),
             children: Vec::new(),
             style: None,
+            separator_left: None,
+            separator_right: None,
         }
     }
 
@@ -30,12 +39,26 @@ impl TreeNode {
             text: text.into(),
             children,
             style: None,
+            separator_left: None,
+            separator_right: None,
         }
     }
 
     /// Set the style used for this node's text.
     pub fn styled(mut self, style: Style) -> Self {
         self.style = Some(style);
+        self
+    }
+
+    /// Set the separator drawn before this node's text.
+    pub fn left_separator(mut self, separator: impl Into<String>) -> Self {
+        self.separator_left = Some(separator.into());
+        self
+    }
+
+    /// Set the separator drawn after this node's text.
+    pub fn right_separator(mut self, separator: impl Into<String>) -> Self {
+        self.separator_right = Some(separator.into());
         self
     }
 
@@ -63,6 +86,35 @@ impl TreeNode {
 impl fmt::Display for TreeNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.text)
+    }
+}
+
+/// Separator rendered between two adjacent nodes sharing a line.
+///
+/// The left node's [`separator_right`](TreeNode::separator_right) and the right
+/// node's [`separator_left`](TreeNode::separator_left) are concatenated, so a
+/// caller can attach the separator to whichever side reads better. When neither
+/// node declares one, `default` (the global separator) is used instead.
+///
+/// An empty separator is a value like any other: `Some("")` suppresses the
+/// global separator rather than falling back to it.
+pub fn separator_between<'a>(
+    left: &'a TreeNode,
+    right: &'a TreeNode,
+    default: &'a str,
+) -> Cow<'a, str> {
+    match (&left.separator_right, &right.separator_left) {
+        (None, None) => Cow::Borrowed(default),
+        (right_sep, left_sep) => {
+            let mut separator = String::new();
+            if let Some(value) = right_sep {
+                separator.push_str(value);
+            }
+            if let Some(value) = left_sep {
+                separator.push_str(value);
+            }
+            Cow::Owned(separator)
+        }
     }
 }
 
@@ -148,5 +200,38 @@ mod tests {
         let a = TreeNode::with_children("a", vec![b]);
         let chain = single_child_chain(&a);
         assert_eq!(chain.len(), 2);
+    }
+
+    #[test]
+    fn separator_defaults_to_the_global_one() {
+        let left = TreeNode::new("a");
+        let right = TreeNode::new("b");
+        assert_eq!(separator_between(&left, &right, " -> "), " -> ");
+    }
+
+    #[test]
+    fn separator_combines_both_sides() {
+        let left = TreeNode::new("a").right_separator("/");
+        let right = TreeNode::new("b").left_separator("/");
+        // Both sides are concatenated: the caller asked for both.
+        assert_eq!(separator_between(&left, &right, " -> "), "//");
+    }
+
+    #[test]
+    fn separator_uses_whichever_side_is_set() {
+        let left = TreeNode::new("a");
+        let right = TreeNode::new("b").left_separator("/");
+        assert_eq!(separator_between(&left, &right, " -> "), "/");
+
+        let left = TreeNode::new("a").right_separator(" :: ");
+        let right = TreeNode::new("b");
+        assert_eq!(separator_between(&left, &right, " -> "), " :: ");
+    }
+
+    #[test]
+    fn empty_separator_suppresses_the_global_one() {
+        let left = TreeNode::new("a");
+        let right = TreeNode::new("b").left_separator("");
+        assert_eq!(separator_between(&left, &right, " -> "), "");
     }
 }

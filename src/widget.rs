@@ -7,6 +7,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::node::separator_between;
 use crate::state::FlattenedItem;
 use crate::TreeNode;
 use crate::TreeState;
@@ -190,7 +191,8 @@ impl<'a> TreeWidget<'a> {
         for (j, node) in item.nodes.iter().enumerate() {
             // Separator between nodes
             if j > 0 {
-                spans.push(Span::styled(bc.separator.to_string(), base));
+                let separator = separator_between(item.nodes[j - 1], node, bc.separator);
+                spans.push(Span::styled(separator.into_owned(), base));
             }
 
             let is_focused = is_row_selected && j == selected_node;
@@ -304,7 +306,8 @@ pub fn node_columns(item: &FlattenedItem, bc: &BranchChars) -> NodeColumns {
 
     for (j, node) in item.nodes.iter().enumerate() {
         if j > 0 {
-            x += UnicodeWidthStr::width(bc.separator) as u16;
+            let separator = separator_between(item.nodes[j - 1], node, bc.separator);
+            x += UnicodeWidthStr::width(separator.as_ref()) as u16;
         }
         start_cols.push(x);
         x += UnicodeWidthStr::width(node.text.as_str()) as u16;
@@ -409,5 +412,64 @@ mod tests {
         assert_eq!(node_index_at_col(5, &nc), 0); // still "a" (col 5 is last col of "a)
         assert_eq!(node_index_at_col(6, &nc), 1); // "bb"
         assert_eq!(node_index_at_col(7, &nc), 1); // "bb"
+    }
+
+    /// Build the first rendered line as a plain string.
+    fn render_first_line(roots: &[TreeNode], width: u16, state: &mut TreeState) -> String {
+        let area = Rect::new(0, 0, width, 1);
+        let mut buf = Buffer::empty(area);
+        StatefulWidget::render(TreeWidget::new(roots), area, &mut buf, state);
+        (0..width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn renders_per_node_separators_with_a_global_fallback() {
+        // root -> users -> 42 -> GET, all in one single-child chain.
+        let method = TreeNode::new("GET");
+        let leaf = TreeNode::with_children("42", vec![method]).left_separator("/");
+        let users = TreeNode::with_children("users", vec![leaf]).left_separator("/");
+        let root = TreeNode::with_children("https://api.example.com", vec![users]);
+        let roots = [root];
+
+        let mut state = TreeState::new();
+        state.expand_all(&roots);
+
+        let line = render_first_line(&roots, 60, &mut state);
+        assert!(
+            line.contains("https://api.example.com/users/42 \u{2192} GET"),
+            "rendered: {line:?}"
+        );
+    }
+
+    #[test]
+    fn right_separator_is_used_when_the_left_one_is_absent() {
+        let child = TreeNode::new("leaf");
+        let root = TreeNode::with_children("root", vec![child]).right_separator("/");
+        let roots = [root];
+
+        let mut state = TreeState::new();
+        state.expand_all(&roots);
+
+        let line = render_first_line(&roots, 40, &mut state);
+        assert!(line.contains("root/leaf"), "rendered: {line:?}");
+    }
+
+    #[test]
+    fn node_columns_account_for_per_node_separators() {
+        let a = TreeNode::new("a");
+        let b = TreeNode::new("bb").left_separator("/");
+        let c = TreeNode::new("ccc").left_separator("::");
+        let item = FlattenedItem {
+            path: vec![],
+            nodes: vec![&a, &b, &c],
+            depth: 0,
+            has_children: false,
+            expanded: false,
+        };
+        let nc = node_columns(&item, &BranchChars::default());
+        // leaf "  " = 2 cols; "a" at 2; "/"+"bb" at 4; "::"+"ccc" at 8.
+        assert_eq!(nc.start_cols, vec![2, 4, 8]);
     }
 }
