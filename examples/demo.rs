@@ -6,7 +6,7 @@ use crossterm::terminal::{
 };
 use crossterm::ExecutableCommand;
 use ratatui::layout::{Alignment, Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;

@@ -2,10 +2,26 @@
 name = "ratatui-tree-widget"
 version = "0.1.0"
 edition = "2021"
+description = "A Ratatui tree widget with expand/collapse, keyboard and mouse interaction, and single-child chain collapsing"
+license = "MIT"
+
+[features]
+default = []
+# Enables the tui-realm `Component` wrapper (`tuirealm::component::TreeRealm`).
+tuirealm = ["dep:tuirealm"]
 
 [dependencies]
-ratatui = "0.29"
+ratatui = "0.30"
 unicode-width = "0.2"
+tuirealm = { version = "4.1", default-features = false, features = ["crossterm"], optional = true }
 
 [dev-dependencies]
-crossterm = "0.28"
+crossterm = "0.29"
+
+[[example]]
+name = "demo"
+required-features = []
+
+[[example]]
+name = "tuirealm-demo"
+required-features = ["tuirealm"]

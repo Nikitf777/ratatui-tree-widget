@@ -66,7 +66,7 @@ impl FlattenedItem<'_> {
 ///
 /// Expansion paths have the form `[root_index, child_index, …]` where the
 /// first element indexes into the forest of roots passed to [`TreeState::flatten`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TreeState {
     /// Index into the flat visible-items list of the currently selected line.
     selected_row: usize,
