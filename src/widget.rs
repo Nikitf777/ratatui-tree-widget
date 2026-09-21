@@ -197,7 +197,7 @@ impl<'a> TreeWidget<'a> {
             let node_style = if is_focused {
                 self.highlight_style
             } else {
-                base
+                node.style.unwrap_or(base)
             };
             spans.push(Span::styled(node.text.clone(), node_style));
         }
@@ -219,14 +219,18 @@ impl<'a> TreeWidget<'a> {
 
         let selected_row = state.selected_row();
         let selected_node = state.selected_node();
+        // Scroll so the selected line stays visible; the widget only owns the
+        // viewport, the offset is derived from the state.
+        let offset = state.scroll_offset(items, area.height);
 
-        for (i, item) in items.iter().enumerate() {
-            if i as u16 >= area.height {
+        for (i, item) in items.iter().enumerate().skip(offset) {
+            let row = i - offset;
+            if row as u16 >= area.height {
                 break;
             }
 
             let is_row_selected = i == selected_row;
-            let row_y = area.y + i as u16;
+            let row_y = area.y + row as u16;
 
             let spans = self.build_row_spans(item, is_row_selected, selected_node, items, i);
 

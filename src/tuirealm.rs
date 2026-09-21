@@ -48,6 +48,9 @@ pub struct TreeRealm {
     roots: Vec<TreeNode>,
     state: TreeState,
     props: Props,
+    /// Height of the content area (inside the block) as of the last render.
+    /// Used to translate mouse rows into lines when the tree is scrolled.
+    content_height: u16,
 }
 
 impl TreeRealm {
@@ -57,6 +60,7 @@ impl TreeRealm {
             roots,
             state: TreeState::new(),
             props: Props::default(),
+            content_height: 0,
         }
     }
 
@@ -83,6 +87,23 @@ impl TreeRealm {
     /// Expand the visual line at `path` (e.g. `&[0]` expands the first root).
     pub fn expand(&mut self, path: &[usize]) {
         self.state.expand(path);
+    }
+
+    /// Expand every line that has children, making the whole forest visible.
+    pub fn expand_all(&mut self) {
+        self.state.expand_all(&self.roots);
+    }
+
+    /// Select the node at `path`, if it is currently visible.
+    pub fn select_path(&mut self, path: &[usize]) -> bool {
+        let items = self.state.flatten(&self.roots);
+        self.state.select_path(&items, path)
+    }
+
+    /// Path of the node that currently has focus.
+    pub fn focused_path(&self) -> Option<Vec<usize>> {
+        let items = self.state.flatten(&self.roots);
+        self.state.focused_path(&items)
     }
 
     /// Display text of the currently selected row (single-child chains are
@@ -132,11 +153,19 @@ impl TreeRealm {
     /// Handle a mouse click given terminal coordinates relative to the tree
     /// **content** area (i.e. after the block border has been subtracted).
     ///
+    /// The row is interpreted against the viewport produced by the last
+    /// [`Component::view`] call, so clicks stay correct while the tree scrolls.
+    ///
     /// Returns [`CmdResult::Changed`] when the selection or expansion state
     /// changed.
     pub fn on_click(&mut self, col: u16, row: u16) -> CmdResult {
         let items = self.state.flatten(&self.roots);
-        let changed = self.state.handle_click(row, &items);
+        let offset = self.state.scroll_offset(&items, self.content_height);
+        let absolute = row as usize + offset;
+        if absolute >= items.len() {
+            return CmdResult::NoChange;
+        }
+        let changed = self.state.handle_click(absolute as u16, &items);
 
         // Focus the node whose text span contains the clicked column.
         if let Some(item) = items.get(self.state.selected_row()) {
@@ -193,17 +222,27 @@ impl Component for TreeRealm {
                 .unwrap_or_else(|| Style::default().fg(Color::DarkGray))
         };
 
+        let title = self
+            .props
+            .get(Attribute::Title)
+            .and_then(AttrValue::as_title)
+            .map(|title| title.content.clone());
+        let bordered = title.is_some();
+
         let mut widget = TreeWidget::new(&self.roots)
             .style(base)
             .highlight_style(highlight);
 
-        if let Some(title) = self
-            .props
-            .get(Attribute::Title)
-            .and_then(AttrValue::as_title)
-        {
-            widget = widget.block(Block::bordered().title(title.content.clone()));
+        if let Some(title) = title {
+            widget = widget.block(Block::bordered().title(title));
         }
+
+        // Remember the row count that clicks are translated against.
+        self.content_height = if bordered {
+            area.height.saturating_sub(2)
+        } else {
+            area.height
+        };
 
         frame.render_stateful_widget(widget, area, &mut self.state);
     }
@@ -218,7 +257,7 @@ impl Component for TreeRealm {
 
     fn state(&self) -> State {
         let items = self.state.flatten(&self.roots);
-        match self.state.selected_path(&items) {
+        match self.state.focused_path(&items) {
             Some(path) => State::Vec(path.iter().map(|&index| StateValue::Usize(index)).collect()),
             None => State::None,
         }

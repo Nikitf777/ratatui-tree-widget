@@ -51,6 +51,20 @@ impl FlattenedItem<'_> {
     }
 }
 
+/// Path of the `index`-th node of a flattened line.
+///
+/// A line merges a chain of single-child nodes: `item.path` points at the last
+/// node of the chain, and every earlier node sits one level up with a
+/// trailing `0`.
+fn node_path_in(item: &FlattenedItem, index: usize) -> Vec<usize> {
+    let len = item.nodes.len();
+    let index = index.min(len.saturating_sub(1));
+    let base_len = item.path.len().saturating_sub(len.saturating_sub(1));
+    let mut path = item.path[..base_len].to_vec();
+    path.extend(std::iter::repeat_n(0, index));
+    path
+}
+
 // ---------------------------------------------------------------------------
 // TreeState
 // ---------------------------------------------------------------------------
@@ -273,6 +287,63 @@ impl TreeState {
         items
             .get(self.selected_row)
             .map(|item| item.path.as_slice())
+    }
+
+    /// Return the path of the node that actually has focus, i.e. the
+    /// `selected_node`-th node of the selected line.
+    ///
+    /// Unlike [`selected_path`](Self::selected_path) this accounts for lines
+    /// that merge a chain of single-child nodes into a single row.
+    pub fn focused_path(&self, items: &[FlattenedItem]) -> Option<Vec<usize>> {
+        let item = items.get(self.selected_row)?;
+        Some(node_path_in(item, self.selected_node))
+    }
+
+    /// Select the node at `path`, if it is currently visible.
+    ///
+    /// `path` is a full path to a node (`[root_index, child_index, …]`).
+    /// Returns `true` when the path was found and selected.
+    pub fn select_path(&mut self, items: &[FlattenedItem], path: &[usize]) -> bool {
+        for (row, item) in items.iter().enumerate() {
+            for node in 0..item.nodes.len() {
+                if node_path_in(item, node) == path {
+                    self.selected_row = row;
+                    self.selected_node = node;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Expand every line that has children, so the whole forest becomes visible.
+    pub fn expand_all(&mut self, roots: &[TreeNode]) {
+        loop {
+            let items = self.flatten(roots);
+            let mut changed = false;
+            for item in &items {
+                if item.has_children && !item.expanded {
+                    self.expand(&item.path);
+                    changed = true;
+                }
+            }
+            if !changed {
+                return;
+            }
+        }
+    }
+
+    /// Number of leading lines to skip so that the selected line stays visible
+    /// in a viewport `height` rows tall.
+    ///
+    /// The selected line is kept near the middle of the viewport.
+    pub fn scroll_offset(&self, items: &[FlattenedItem], height: u16) -> usize {
+        let height = height as usize;
+        if height == 0 {
+            return 0;
+        }
+        let max = items.len().saturating_sub(height);
+        self.selected_row.saturating_sub(height / 2).min(max)
     }
 
     /// Return a reference to the currently selected [`TreeNode`] within the
@@ -647,5 +718,114 @@ mod tests {
 
         state.handle_key(make(KeyCode::Enter), &flatten_one(&state, &tree));
         assert!(!state.is_expanded(&[0]));
+    }
+
+    // -- focused path / programmatic selection ---------------------------------
+
+    #[test]
+    fn focused_path_accounts_for_single_child_chains() {
+        // a -> a1 -> a1a, all on one visual line.
+        let tree = TreeNode::with_children(
+            "a",
+            vec![TreeNode::with_children("a1", vec![TreeNode::new("a1a")])],
+        );
+        let mut state = TreeState::new();
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
+        assert_eq!(items.len(), 1);
+
+        state.select(0, 0);
+        assert_eq!(state.focused_path(&items).unwrap(), vec![0]);
+        state.select(0, 1);
+        assert_eq!(state.focused_path(&items).unwrap(), vec![0, 0]);
+        state.select(0, 2);
+        assert_eq!(state.focused_path(&items).unwrap(), vec![0, 0, 0]);
+
+        // `selected_path` keeps reporting the end of the chain.
+        assert_eq!(state.selected_path(&items).unwrap().to_vec(), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn select_path_finds_nodes_inside_a_chain() {
+        let tree = TreeNode::with_children(
+            "a",
+            vec![TreeNode::with_children("a1", vec![TreeNode::new("a1a")])],
+        );
+        let mut state = TreeState::new();
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
+
+        assert!(state.select_path(&items, &[0, 0]));
+        assert_eq!(state.selected_row(), 0);
+        assert_eq!(state.selected_node(), 1);
+        assert_eq!(state.focused_path(&items).unwrap(), vec![0, 0]);
+
+        assert!(!state.select_path(&items, &[0, 7]));
+    }
+
+    #[test]
+    fn select_path_across_multiple_roots() {
+        let roots = vec![
+            TreeNode::with_children("A", vec![TreeNode::new("a1")]),
+            TreeNode::new("B"),
+        ];
+        let mut state = TreeState::new();
+        let items = state.flatten(&roots);
+        // "A → a1" collapses into a single line, "B" is the next one.
+        assert_eq!(items.len(), 2);
+
+        assert!(state.select_path(&items, &[1]));
+        assert_eq!(state.selected_row(), 1);
+        assert_eq!(state.focused_path(&items).unwrap(), vec![1]);
+
+        // Nodes inside a collapsed chain are addressable too.
+        assert!(state.select_path(&items, &[0, 0]));
+        assert_eq!(state.selected_row(), 0);
+        assert_eq!(state.selected_node(), 1);
+        assert_eq!(state.focused_path(&items).unwrap(), vec![0, 0]);
+    }
+
+    // -- scrolling -------------------------------------------------------------
+
+    #[test]
+    fn scroll_offset_is_zero_when_everything_fits() {
+        let tree = sample_tree();
+        let mut state = TreeState::new();
+        state.expand_all(std::slice::from_ref(&tree));
+        let items = flatten_one(&state, &tree);
+        assert_eq!(state.scroll_offset(&items, items.len() as u16 + 5), 0);
+        assert_eq!(state.scroll_offset(&items, 0), 0);
+    }
+
+    #[test]
+    fn scroll_offset_keeps_selection_visible() {
+        let tree = sample_tree();
+        let mut state = TreeState::new();
+        state.expand_all(std::slice::from_ref(&tree));
+        let items = flatten_one(&state, &tree);
+        assert!(items.len() > 3);
+
+        state.select_row(items.len() - 1);
+        let offset = state.scroll_offset(&items, 3);
+        assert!(offset + 3 >= items.len(), "last line must be visible");
+        assert!(offset <= items.len() - 3, "offset must stay in range");
+
+        // Selecting the first line scrolls back to the top.
+        state.select_row(0);
+        assert_eq!(state.scroll_offset(&items, 3), 0);
+    }
+
+    // -- expand all ------------------------------------------------------------
+
+    #[test]
+    fn expand_all_reveals_the_whole_forest() {
+        let tree = sample_tree();
+        let mut state = TreeState::new();
+        assert_eq!(state.flatten(std::slice::from_ref(&tree)).len(), 1);
+
+        state.expand_all(std::slice::from_ref(&tree));
+        let items = state.flatten(std::slice::from_ref(&tree));
+        assert_eq!(items.len(), 6);
+        assert!(items.iter().all(|item| !item.has_children || item.expanded));
     }
 }

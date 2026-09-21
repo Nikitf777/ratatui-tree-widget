@@ -1,5 +1,7 @@
 use std::fmt;
 
+use ratatui::style::Style;
+
 /// A single node in the tree.
 ///
 /// Each node holds some text and an ordered list of children.
@@ -7,6 +9,9 @@ use std::fmt;
 pub struct TreeNode {
     pub text: String,
     pub children: Vec<TreeNode>,
+    /// Style used for this node's text when it is not the focused node.
+    /// `None` falls back to the widget's base style.
+    pub style: Option<Style>,
 }
 
 impl TreeNode {
@@ -15,6 +20,7 @@ impl TreeNode {
         Self {
             text: text.into(),
             children: Vec::new(),
+            style: None,
         }
     }
 
@@ -23,7 +29,14 @@ impl TreeNode {
         Self {
             text: text.into(),
             children,
+            style: None,
         }
+    }
+
+    /// Set the style used for this node's text.
+    pub fn styled(mut self, style: Style) -> Self {
+        self.style = Some(style);
+        self
     }
 
     /// Add a child node.
