@@ -14,7 +14,7 @@ use tuirealm::component::Component;
 use tuirealm::props::{AttrValue, Attribute, LineStatic, Props, QueryResult, Title};
 use tuirealm::state::{State, StateValue};
 
-use crate::{node_columns, node_index_at_col, TreeNode, TreeState, TreeWidget};
+use crate::{BranchChars, TreeNode, TreeState, TreeWidget};
 
 /// A tui-realm [`Component`] wrapper around [`TreeWidget`].
 ///
@@ -165,16 +165,15 @@ impl TreeRealm {
         if absolute >= items.len() {
             return CmdResult::NoChange;
         }
-        let changed = self.state.handle_click(absolute as u16, &items);
 
-        // Focus the node whose text span contains the clicked column.
-        if let Some(item) = items.get(self.state.selected_row()) {
-            let columns = node_columns(item, &Default::default());
-            let node = node_index_at_col(col, &columns);
-            self.state.set_selected_node(node);
-        }
+        // Compare the whole state rather than trusting a single row-level
+        // return value: moving focus between nodes of the same row is a change
+        // too, and callers rely on `Changed` to know they must redraw.
+        let before = self.state.clone();
+        self.state
+            .handle_click_at(absolute as u16, col, &items, &BranchChars::default());
 
-        if changed {
+        if self.state != before {
             CmdResult::Changed(self.state())
         } else {
             CmdResult::NoChange

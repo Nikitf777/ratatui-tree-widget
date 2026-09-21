@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::node::single_child_chain;
+use crate::widget::{node_columns, node_index_at_col, BranchChars};
 use crate::TreeNode;
 
 // ---------------------------------------------------------------------------
@@ -373,29 +374,58 @@ impl TreeState {
         }
     }
 
-    /// Handle a mouse click at the given row (relative to the tree content
-    /// area).  Returns `true` if the state changed.
+    /// Handle a mouse click at `(row, col)`, where `col` is relative to the
+    /// tree content area (after block borders).
     ///
-    /// Clicking a new row selects its first node.  Clicking the already
-    /// selected row toggles expand/collapse if the last node has children.
-    pub fn handle_click(&mut self, row: u16, flatten: &[FlattenedItem]) -> bool {
-        if row as usize >= flatten.len() {
+    /// Resolves which node of the row was clicked using the same layout math
+    /// [`TreeWidget`] renders with, then delegates to
+    /// [`handle_click_node`](Self::handle_click_node). Returns `true` if the
+    /// state changed.
+    pub fn handle_click_at(
+        &mut self,
+        row: u16,
+        col: u16,
+        flatten: &[FlattenedItem],
+        bc: &BranchChars,
+    ) -> bool {
+        let Some(item) = flatten.get(row as usize) else {
             return false;
-        }
-        let prev_row = self.selected_row;
-        self.selected_row = row as usize;
-        self.selected_node = 0;
+        };
+        let node = node_index_at_col(col, &node_columns(item, bc));
+        self.handle_click_node(row as usize, node, flatten)
+    }
 
-        // Toggle expand/collapse if clicking the same row.
-        if prev_row == self.selected_row {
-            if let Some(item) = flatten.get(self.selected_row) {
-                if item.has_children {
-                    self.toggle(&item.path);
-                    return true;
-                }
-            }
+    /// Handle a click that resolved to a specific `(row, node)` position.
+    /// Returns `true` if the state changed.
+    ///
+    /// Focus moves to the clicked node. Expansion is toggled only when the
+    /// click lands on the node that already has focus *and* that node is the
+    /// last one on the row — the only node whose children the row can own.
+    /// Clicking a sibling earlier in a merged chain therefore just moves
+    /// focus instead of collapsing the row.
+    pub fn handle_click_node(
+        &mut self,
+        row: usize,
+        node: usize,
+        flatten: &[FlattenedItem],
+    ) -> bool {
+        let Some(item) = flatten.get(row) else {
+            return false;
+        };
+        let last = item.nodes.len().saturating_sub(1);
+        let node = node.min(last);
+
+        let prev_row = self.selected_row;
+        let prev_node = self.selected_node;
+        self.selected_row = row;
+        self.selected_node = node;
+
+        if prev_row == row && prev_node == node && node == last && item.has_children {
+            self.toggle(&item.path);
+            return true;
         }
-        prev_row != self.selected_row
+
+        prev_row != row || prev_node != node
     }
 }
 
@@ -687,6 +717,130 @@ mod tests {
         state.toggle(&[0]);
         let items = flatten_one(&state, &tree);
         assert_eq!(items.len(), 1);
+    }
+
+    // -- mouse clicks ----------------------------------------------------------
+
+    #[test]
+    fn click_same_row_different_node_moves_focus() {
+        // a → a1 → a1a is a single-child chain collapsed onto one row, and the
+        // chain ends in a leaf, so this row can never toggle.
+        let tree = TreeNode::with_children(
+            "a",
+            vec![TreeNode::with_children("a1", vec![TreeNode::new("a1a")])],
+        );
+        let mut state = TreeState::new();
+        let items = flatten_one(&state, &tree);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].nodes.len(), 3);
+        assert!(items[0].nodes.last().unwrap().is_leaf());
+
+        state.select(0, 0);
+        assert_eq!(state.selected_node(), 0);
+
+        // Click the second node on the same row — focus moves.
+        assert!(state.handle_click_node(0, 1, &items));
+        assert_eq!(state.selected_node(), 1);
+
+        // Click the third node.
+        assert!(state.handle_click_node(0, 2, &items));
+        assert_eq!(state.selected_node(), 2);
+
+        // Re-clicking the focused leaf node changes nothing.
+        assert!(!state.handle_click_node(0, 2, &items));
+        assert_eq!(state.selected_node(), 2);
+    }
+
+    #[test]
+    fn click_focused_last_node_twice_toggles() {
+        // root has one child, so "root → a" is one row, and `a` owns b1/b2.
+        let tree = TreeNode::with_children(
+            "root",
+            vec![TreeNode::with_children(
+                "a",
+                vec![TreeNode::new("b1"), TreeNode::new("b2")],
+            )],
+        );
+        let mut state = TreeState::new();
+        state.expand(&[0, 0]); // expand `a`, the last node of the merged row
+        let items = flatten_one(&state, &tree);
+        assert_eq!(items.len(), 3); // root → a, b1, b2
+        assert_eq!(items[0].nodes.len(), 2);
+
+        state.select(0, 1);
+        assert!(state.is_expanded(&[0, 0]));
+
+        // Clicking the already-focused last node collapses.
+        assert!(state.handle_click_node(0, 1, &items));
+        assert!(!state.is_expanded(&[0, 0]));
+
+        // ...and expands again.
+        assert!(state.handle_click_node(0, 1, &items));
+        assert!(state.is_expanded(&[0, 0]));
+    }
+
+    #[test]
+    fn click_middle_of_chain_does_not_toggle_last_node() {
+        let tree = TreeNode::with_children(
+            "root",
+            vec![
+                TreeNode::with_children(
+                    "docs",
+                    vec![TreeNode::with_children(
+                        "guide",
+                        vec![TreeNode::new("a.md"), TreeNode::new("b.md")],
+                    )],
+                ),
+                TreeNode::new("other"),
+            ],
+        );
+        let mut state = TreeState::new();
+        state.expand(&[0]); // root
+        state.expand(&[0, 0, 0]); // guide — the last node of the "docs → guide" row
+        let items = flatten_one(&state, &tree);
+        // 0: root, 1: docs → guide, 2: a.md, 3: b.md, 4: other
+        assert_eq!(items.len(), 5);
+        assert_eq!(items[1].nodes.len(), 2);
+        assert!(state.is_expanded(&[0, 0, 0]));
+
+        // Focus "docs", then click "guide": focus moves, children stay visible.
+        state.select(1, 0);
+        assert!(state.handle_click_node(1, 1, &items));
+        assert_eq!(state.selected_node(), 1);
+        assert!(state.is_expanded(&[0, 0, 0]));
+
+        // A second click on the now-focused last node does toggle.
+        assert!(state.handle_click_node(1, 1, &items));
+        assert!(!state.is_expanded(&[0, 0, 0]));
+    }
+
+    #[test]
+    fn handle_click_at_resolves_column_to_node() {
+        use crate::BranchChars;
+        let tree = TreeNode::with_children(
+            "a",
+            vec![TreeNode::with_children("a1", vec![TreeNode::new("a1a")])],
+        );
+        let mut state = TreeState::new();
+        state.expand(&[0]);
+        let items = flatten_one(&state, &tree);
+        assert_eq!(items.len(), 1);
+
+        // Compute the column offsets for each node.
+        let bc = BranchChars::default();
+        let cols = crate::node_columns(&items[0], &bc);
+
+        // Click at the start of node 1's text.
+        let col1 = cols.start_cols[1];
+        let changed = state.handle_click_at(0, col1, &items, &bc);
+        assert!(changed);
+        assert_eq!(state.selected_node(), 1);
+
+        // Click at the start of node 2's text.
+        let col2 = cols.start_cols[2];
+        let changed = state.handle_click_at(0, col2, &items, &bc);
+        assert!(changed);
+        assert_eq!(state.selected_node(), 2);
     }
 
     // -- handle_key -----------------------------------------------------------

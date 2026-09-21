@@ -130,15 +130,7 @@ fn handle_mouse(mouse: MouseEvent, roots: &[TreeNode], state: &mut TreeState) {
     let col = mouse.column.saturating_sub(tree_content_x);
 
     let items = state.flatten(roots);
-    state.handle_click(row, &items);
-
-    // Determine which node within the row was clicked using the same layout
-    // math the widget uses.
-    if let Some(item) = items.get(state.selected_row()) {
-        let nc = ratatui_tree_widget::node_columns(item, &Default::default());
-        let node_idx = ratatui_tree_widget::node_index_at_col(col, &nc);
-        state.set_selected_node(node_idx);
-    }
+    state.handle_click_at(row, col, &items, &Default::default());
 }
 
 // ---------------------------------------------------------------------------
