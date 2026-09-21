@@ -195,6 +195,14 @@ impl TreeState {
         }
     }
 
+    pub fn toggle_selected(&mut self, items: &[FlattenedItem]) {
+        if let Some(item) = items.get(self.selected_row) {
+            if item.has_children {
+                self.toggle(&item.path);
+            }
+        }
+    }
+
     /// Expand the visual line at `path`.
     pub fn expand(&mut self, path: &[usize]) {
         self.expanded.insert(path.to_vec());
@@ -276,7 +284,8 @@ impl TreeState {
             .copied()
     }
 
-    /// Handle keyboard input.
+    /// Handle default keybindings.
+    /// Don't use this method if you need custom keybindings.
     pub fn handle_key(
         &mut self,
         key: ratatui::crossterm::event::KeyEvent,
@@ -288,13 +297,7 @@ impl TreeState {
             KeyCode::Down | KeyCode::Char('j') => self.key_down(flatten),
             KeyCode::Left | KeyCode::Char('h') => self.key_left(flatten),
             KeyCode::Right | KeyCode::Char('l') => self.key_right(flatten),
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(item) = flatten.get(self.selected_row) {
-                    if item.has_children {
-                        self.toggle(&item.path);
-                    }
-                }
-            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_selected(flatten),
             _ => {}
         }
     }
