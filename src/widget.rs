@@ -7,10 +7,10 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::node::separator_between;
-use crate::state::FlattenedItem;
 use crate::TreeNode;
 use crate::TreeState;
+use crate::node::separator_between;
+use crate::state::FlattenedItem;
 
 // ---------------------------------------------------------------------------
 // TreeWidget
@@ -188,9 +188,13 @@ impl<'a> TreeWidget<'a> {
         spans.push(Span::styled(glyph_text.to_string(), g_style));
 
         // ---- Nodes (each gets its own style) ----
+        let last = item.nodes.len().saturating_sub(1);
         for (j, node) in item.nodes.iter().enumerate() {
-            // Separator between nodes
-            if j > 0 {
+            if j == 0 {
+                if let Some(separator) = &node.separator_left {
+                    spans.push(Span::styled(separator.clone(), base));
+                }
+            } else {
                 let separator = separator_between(item.nodes[j - 1], node, bc.separator);
                 spans.push(Span::styled(separator.into_owned(), base));
             }
@@ -202,6 +206,12 @@ impl<'a> TreeWidget<'a> {
                 node.style.unwrap_or(base)
             };
             spans.push(Span::styled(node.text.clone(), node_style));
+
+            if j == last {
+                if let Some(separator) = &node.separator_right {
+                    spans.push(Span::styled(separator.clone(), base));
+                }
+            }
         }
 
         spans
@@ -303,14 +313,24 @@ pub fn node_columns(item: &FlattenedItem, bc: &BranchChars) -> NodeColumns {
     };
 
     let mut start_cols = Vec::with_capacity(item.nodes.len());
+    let last = item.nodes.len().saturating_sub(1);
 
     for (j, node) in item.nodes.iter().enumerate() {
-        if j > 0 {
+        if j == 0 {
+            if let Some(separator) = &node.separator_left {
+                x += UnicodeWidthStr::width(separator.as_str()) as u16;
+            }
+        } else {
             let separator = separator_between(item.nodes[j - 1], node, bc.separator);
             x += UnicodeWidthStr::width(separator.as_ref()) as u16;
         }
         start_cols.push(x);
         x += UnicodeWidthStr::width(node.text.as_str()) as u16;
+        if j == last {
+            if let Some(separator) = &node.separator_right {
+                x += UnicodeWidthStr::width(separator.as_str()) as u16;
+            }
+        }
     }
 
     NodeColumns { start_cols }
@@ -414,14 +434,28 @@ mod tests {
         assert_eq!(node_index_at_col(7, &nc), 1); // "bb"
     }
 
-    /// Build the first rendered line as a plain string.
-    fn render_first_line(roots: &[TreeNode], width: u16, state: &mut TreeState) -> String {
-        let area = Rect::new(0, 0, width, 1);
+    /// Build the rendered lines as plain strings.
+    fn render_lines(
+        roots: &[TreeNode],
+        width: u16,
+        height: u16,
+        state: &mut TreeState,
+    ) -> Vec<String> {
+        let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         StatefulWidget::render(TreeWidget::new(roots), area, &mut buf, state);
-        (0..width)
-            .map(|x| buf[(x, 0)].symbol().to_string())
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
             .collect()
+    }
+
+    /// Build the first rendered line as a plain string.
+    fn render_first_line(roots: &[TreeNode], width: u16, state: &mut TreeState) -> String {
+        render_lines(roots, width, 1, state).remove(0)
     }
 
     #[test]
@@ -471,5 +505,59 @@ mod tests {
         let nc = node_columns(&item, &BranchChars::default());
         // leaf "  " = 2 cols; "a" at 2; "/"+"bb" at 4; "::"+"ccc" at 8.
         assert_eq!(nc.start_cols, vec![2, 4, 8]);
+    }
+
+    #[test]
+    fn renders_separators_around_a_node_alone_on_its_line() {
+        let alone = TreeNode::new("leaf")
+            .left_separator("/")
+            .right_separator("!");
+        let other = TreeNode::new("other");
+        let root = TreeNode::with_children("root", vec![alone, other]);
+        let roots = [root];
+
+        let mut state = TreeState::new();
+        state.expand_all(&roots);
+        let lines = render_lines(&roots, 40, 3, &mut state);
+
+        assert!(lines[1].contains("/leaf!"), "rendered: {:?}", lines[1]);
+        // The global separator only fills the space *between* two nodes, so a
+        // node starting a line with no separator of its own stays bare.
+        assert!(!lines[2].contains('\u{2192}'), "rendered: {:?}", lines[2]);
+        assert!(lines[2].contains("other"), "rendered: {:?}", lines[2]);
+    }
+
+    #[test]
+    fn renders_edge_separators_of_a_multi_node_line() {
+        let leaf = TreeNode::new("leaf").right_separator("]");
+        let mid = TreeNode::with_children("mid", vec![leaf]).left_separator("[");
+        let root = TreeNode::with_children("root", vec![mid]).left_separator("<");
+        let roots = [root];
+
+        let mut state = TreeState::new();
+        state.expand_all(&roots);
+        let line = render_first_line(&roots, 40, &mut state);
+
+        assert!(
+            line.contains("<root[mid \u{2192} leaf]"),
+            "rendered: {line:?}"
+        );
+    }
+
+    #[test]
+    fn node_columns_account_for_edge_separators() {
+        let alone = TreeNode::new("leaf")
+            .left_separator("/")
+            .right_separator("!");
+        let item = FlattenedItem {
+            path: vec![],
+            nodes: vec![&alone],
+            depth: 0,
+            has_children: false,
+            expanded: false,
+        };
+        let nc = node_columns(&item, &BranchChars::default());
+        // leaf glyph "  " = 2, then the "/" separator, so the text starts at 3.
+        assert_eq!(nc.start_cols, vec![3]);
     }
 }

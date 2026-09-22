@@ -13,11 +13,17 @@ pub struct TreeNode {
     /// Style used for this node's text when it is not the focused node.
     /// `None` falls back to the widget's base style.
     pub style: Option<Style>,
-    /// Separator drawn immediately to the left of this node's text, when the
-    /// node has a preceding node on the same line.
+    /// Separator drawn immediately before this node's text.
+    ///
+    /// When the node follows another node on the same line this is combined with
+    /// that node's [`separator_right`](TreeNode::separator_right); when the node
+    /// starts a line it is rendered on its own.
     pub separator_left: Option<String>,
-    /// Separator drawn immediately to the right of this node's text, when the
-    /// node has a following node on the same line.
+    /// Separator drawn immediately after this node's text.
+    ///
+    /// When the node is followed by another node on the same line this is
+    /// combined with that node's [`separator_left`](TreeNode::separator_left);
+    /// when the node ends a line it is rendered on its own.
     pub separator_right: Option<String>,
 }
 
@@ -95,6 +101,11 @@ impl fmt::Display for TreeNode {
 /// node's [`separator_left`](TreeNode::separator_left) are concatenated, so a
 /// caller can attach the separator to whichever side reads better. When neither
 /// node declares one, `default` (the global separator) is used instead.
+///
+/// This only covers the space *between* two nodes; a node at the start or end of
+/// a line renders its own [`separator_left`](TreeNode::separator_left) /
+/// [`separator_right`](TreeNode::separator_right) directly, with no fallback to
+/// the global separator.
 ///
 /// An empty separator is a value like any other: `Some("")` suppresses the
 /// global separator rather than falling back to it.
