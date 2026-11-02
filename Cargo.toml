@@ -1,7 +1,7 @@
 [package]
 name = "ratatui-tree-widget"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "A Ratatui tree widget with expand/collapse, keyboard and mouse interaction, and single-child chain collapsing"
 license = "MIT"
 
